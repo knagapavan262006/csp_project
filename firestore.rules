@@ -1,0 +1,83 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isStudent(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function ownsCertificate(certificate) {
+      return isSignedIn()
+        && (
+          (certificate.keys().hasAny(['studentUid']) && certificate.studentUid == request.auth.uid)
+          || (certificate.keys().hasAny(['studentId']) && certificate.studentId == request.auth.uid)
+          || (certificate.keys().hasAny(['uid']) && certificate.uid == request.auth.uid)
+        );
+    }
+
+    match /students/{studentId} {
+      allow create: if isSignedIn()
+        && request.auth.uid == studentId
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.role == 'student'
+        && request.resource.data.email == request.auth.token.email;
+
+      allow get: if isStudent(studentId) || isAdmin();
+      allow list: if isAdmin();
+
+      allow update: if isStudent(studentId)
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.role == 'student'
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.rollNumber == resource.data.rollNumber
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'phone',
+          'branch',
+          'department',
+          'year',
+          'academicYear',
+          'profileCompleted',
+          'updatedAt'
+        ]);
+
+      allow delete: if false;
+    }
+
+    match /studentLogins/{rollNumber} {
+      allow get: if true;
+      allow create: if isSignedIn()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.rollNumber == rollNumber
+        && request.resource.data.email == request.auth.token.email;
+      allow update, delete: if false;
+    }
+
+    match /certificates/{certificateId} {
+      allow create: if isSignedIn()
+        && request.resource.data.studentUid == request.auth.uid
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.studentId == request.auth.uid
+        && request.resource.data.fileURL is string
+        && request.resource.data.fileURL.size() > 0
+        && request.resource.data.status == 'pending';
+
+      allow get: if isAdmin() || ownsCertificate(resource.data);
+      allow list: if isAdmin() || ownsCertificate(resource.data);
+      allow update: if isAdmin();
+
+      allow delete: if false;
+    }
+
+    match /admins/{adminId} {
+      allow read: if isSignedIn() && request.auth.uid == adminId;
+      allow write: if false;
+    }
+  }
+}
